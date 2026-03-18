@@ -19,6 +19,7 @@ mrd-format-info/
 *.so
 *.png
 
+out/tests/
 __pycache__
 
 site/
