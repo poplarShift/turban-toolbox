@@ -1,4 +1,5 @@
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
+[![DOI](https://zenodo.org/badge/921126258.svg)](https://zenodo.org/badge/latestdoi/921126258)
 
 # Turbulence Analysis Toolbox (Turban-Toolbox)
 
