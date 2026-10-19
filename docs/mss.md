@@ -28,7 +28,7 @@ import numpy as np
 from turban import ShearProcessing, ShearLevel1, ShearConfig
 from turban.instruments.mss.config import MssDeviceConfig
 from turban.instruments.mss.mss_mrd import read_mrd, raw_to_level0, level0_to_level1
-from tests.filepaths import atomix_benchmark_baltic_mrd_fpath
+from turban.utils.filepaths import atomix_benchmark_baltic_mrd_fpath
 
 # For well-curated .MRD files (including e.g. calibration constants),
 # we can load the configuration and metadata directly from there
@@ -101,7 +101,9 @@ for i, (fig, axes) in enumerate(figs):
     fig.savefig(f"out/tests/instruments/mss/SH2_0330_level{i+1}.png")
 ```
 
-When the .MRD file is not as well curated or for any other reason, we can load from a json file as well:
+When the .MRD file is not as well curated or for any other reason, we can load from a json file as well.
+`MssDeviceConfig` is a pydantic model, so a configuration read with `from_mrd` round-trips
+through a python dict or JSON without loss:
 
 ```python continuation
 import json
