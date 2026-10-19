@@ -9,21 +9,3 @@ The git repository is hosted on [github](https://https://github.com/turban-toolb
 
 
 Currently, only shear processing is fully functional. It has nascent support for temperature microstructure, and more is on the way (e.g. high-frequency ADCP).
-
-### Installation
-
-To install dependencies with pip for the end user, including packages only needed for the MSS:
-```bash
-python -m pip install -e . --group mss
-```
-or, including for the microrider:
-```bash
-python -m pip install -e . --group mss --group microrider
-```
-
-or, for developers, something like:
-```bash
-python -m pip install -e . --group dev --group mss
-```
-
-This can be done in any python environment.
