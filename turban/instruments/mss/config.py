@@ -3,7 +3,7 @@ import sys
 from typing import cast
 from pathlib import Path
 import numpy as np
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from turban.instruments.mss import mss_mrd
 
@@ -21,7 +21,14 @@ mss_standard_ctd_sensornames["temp"] = ["TEMP", "NTC"]
 mss_standard_ctd_sensornames["cond"] = ["COND"]
 
 
-class MssSensor(BaseModel):
+class _MssBaseModel(BaseModel):
+    # pydantic's default dumps NaN/inf as JSON null, which does not validate back
+    # into a float (or silently becomes None for optional floats). "strings" writes
+    # "NaN"/"Infinity", which is valid JSON and validates back to the float.
+    model_config = ConfigDict(ser_json_inf_nan="strings")
+
+
+class MssSensor(_MssBaseModel):
     name: str
     coefficients: list[float]
     channel: int
@@ -314,7 +321,7 @@ class MssSensorOptodeInternalTemp(MssSensor):
         return data
 
 
-class MssDeviceConfig(BaseModel):
+class MssDeviceConfig(_MssBaseModel):
     offset: int = Field(
         default=0, description="16bit offset, typically 0, older devices have -32768"
     )
