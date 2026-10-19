@@ -1,3 +1,4 @@
+[![PyPI](https://img.shields.io/pypi/v/turban-toolbox.svg)](https://pypi.org/project/turban-toolbox/)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 [![DOI](https://zenodo.org/badge/921126258.svg)](https://zenodo.org/badge/latestdoi/921126258)
 
