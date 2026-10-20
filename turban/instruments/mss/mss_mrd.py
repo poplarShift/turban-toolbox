@@ -374,7 +374,8 @@ def level0_to_level1(mss_config, level0, pspd_rel=None) -> xr.Dataset:
             if ("SHE" in k) and (numshear is not None):
                 shearsensors.append(k)
 
-        n_shear = range(len(shearsensors))
+        n_shear = range(len(shearsensors)) if shearsensors else range(1)
+        # dummy dimension for NaN shear values
         index = level0["index"]
         nsamples = len(level0["index"])
 
@@ -488,7 +489,13 @@ def level0_to_level1(mss_config, level0, pspd_rel=None) -> xr.Dataset:
 
         shear = numpy.asarray(shear)
         shear[numpy.isinf(shear)] = numpy.nan
-        level1_dataset["SHEAR"] = (["n_shear", "index"], shear)
+        if shear.size:
+            level1_dataset["SHEAR"] = (["n_shear", "index"], shear)
+        else:  # no shear data exists
+            level1_dataset["SHEAR"] = (
+                ["n_shear", "index"],
+                numpy.zeros((1, len(level0.Count)), dtype=float),
+            )
 
         level1_dataset["utemp"] = (
             ["n_temp", "time"],
