@@ -350,6 +350,7 @@ class ShearLevel4(Level4):
             num_spec_points=num_spec_points,
             num_despike_iter=level3.max_despike_iter,
             resolved_var_frac=resolved_var_frac,
+            max_tries=level3.cfg.max_tries,
         )
 
         kwarg.update(
