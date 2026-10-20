@@ -129,9 +129,13 @@ def get_quality_metric(
     num_spec_points: Int[ndarray, "nshear time"],
     num_despike_iter: Int[ndarray, "nshear time"],
     resolved_var_frac: Float[ndarray, "nshear time"],
+    max_tries: int,
 ) -> Int[ndarray, "nshear time"]:
     """
     Aassemble `Q` flag from ATOMIX paper. We do this probe-wise.
+
+    `max_tries` is the despiking iteration limit used at level 2; chunks where
+    `num_despike_iter` reached it are flagged.
 
     Notes: ATOMIX specifies that if FOM is too large, then shear_disagree should be
     disregarded. We choose not to, and leave it at the discretion of the user."""
@@ -160,7 +164,7 @@ def get_quality_metric(
     # Shear estimates disagree between probes
     quality_metric += np.where(shear_disagree, 4, 0)
     # Too many despike iterations
-    quality_metric += np.where(num_despike_iter > 0.05, 8, 0)
+    quality_metric += np.where(num_despike_iter >= max_tries, 8, 0)
     # Insufficient variance resolved
     quality_metric += np.where(resolved_var_frac < 0.6, 16, 0)
 
