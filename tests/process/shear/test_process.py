@@ -116,12 +116,6 @@ def test_baltic_benchmark(tmp_path):
             arr["cond"],
             {"max": "cond"},
         ),
-        # same as in turban.instruments.mss.api.mrd_to_level1
-        "molvisc": (
-            ["time"],
-            viscosity_kinematic(arr["temp"][0, :]),
-            {"mean": "molvisc"},
-        ),
     }
 
     p = ShearProcessing.from_atomix_netcdf(
@@ -173,6 +167,7 @@ def test_baltic_benchmark(tmp_path):
     # round trip through netcdf restores shared aux data
     fname = tmp_path / "baltic.nc"
     data_tree.to_netcdf(fname)
+    print(data_tree)
     p2 = ShearProcessing.from_xarray(xr.open_datatree(fname))
     for level, level_below in [(p2.level2, p2.level1), (p2.level4, p2.level3)]:
         assert level.aux_data
