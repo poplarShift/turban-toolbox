@@ -168,23 +168,6 @@ class TimeseriesLevel:
         """Instantiate this level from its node in a DataTree."""
         return cls.from_xarray(tree[cls._level.name].to_dataset())
 
-    def get_attr(self, name):
-        """Retrieve an attribute by name.
-
-        Parameters
-        ----------
-        name : str
-            Name of the attribute to retrieve.
-
-        Returns
-        -------
-        object
-            Value of the attribute.
-        """
-        attr = getattr(self, name)
-        if isinstance(attr, SegmentConfig):
-            return getattr()
-
 
 @dataclass(kw_only=True)
 class AuxiliaryData(TimeseriesLevel):
