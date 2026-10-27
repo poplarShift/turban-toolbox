@@ -7,6 +7,9 @@ results can be compared one-to-one with that toolbox:
 * thermal diffusivity: k / (rho * c_p) with the seawater thermophysical
   property correlations of Sharqawy, Lienhard & Zubair (2010),
   Desalination and Water Treatment 16, 354-380.
+
+In addition, ``viscosity_kinematic_full`` gives the kinematic viscosity
+at arbitrary salinity from the Sharqawy et al. (2010) correlations.
 """
 
 import numpy as np
@@ -45,7 +48,9 @@ def _thermal_conductivity(temp: ArrayOrFloat, sal: ArrayOrFloat) -> ArrayOrFloat
     tk = t68 + 273.15
     return 10 ** (
         np.log10(240 + 0.0002 * sp)
-        + 0.434 * (2.3 - (343.5 + 0.037 * sp) / tk) * (1 - tk / (647.3 + 0.03 * sp)) ** (1 / 3)
+        + 0.434
+        * (2.3 - (343.5 + 0.037 * sp) / tk)
+        * (1 - tk / (647.3 + 0.03 * sp)) ** (1 / 3)
         - 3
     )
 
@@ -80,6 +85,53 @@ def _density(temp: ArrayOrFloat, sal: ArrayOrFloat) -> ArrayOrFloat:
         - 1.6132224742e-05 * s**2 * t**2
     )
     return rho_w + d_rho
+
+
+def viscosity_kinematic_full(temp: ArrayOrFloat, sal: ArrayOrFloat) -> ArrayOrFloat:
+    """Kinematic viscosity of seawater at arbitrary salinity.
+
+    Computed as nu = mu / rho at atmospheric pressure, both from Sharqawy,
+    Lienhard & Zubair (2010). The dynamic viscosity correlation (based on
+    Isdale et al. 1972 and El-Dessouky & Ettouney 2002) is::
+
+        mu_sw = mu_w * (1 + A*S + B*S**2)
+        A = 1.541 + 1.998e-2*T - 9.52e-5*T**2
+        B = 7.974 - 7.561e-2*T + 4.724e-4*T**2
+        mu_w = 4.2844e-5 + 1 / (0.157*(T + 64.993)**2 - 91.296)
+
+    with T in degrees Celsius (ITS-90), S the reference salinity in kg/kg and
+    ``mu_w`` the IAPWS 2008 pure water viscosity fit. Valid for
+    0 <= T <= 180 degC and 0 <= S <= 150 g/kg with an accuracy of +-1.5 %.
+    The pressure dependence (< 1 % over the oceanic range) is neglected.
+    Unlike ``viscosity_kinematic`` (ODAS ``visc35``) this is not restricted to
+    salinity 35.
+
+    Parameters
+    ----------
+    temp : ndarray or float
+        Temperature in degrees Celsius.
+    sal : ndarray or float
+        Practical salinity. Converted to reference salinity for the viscosity
+        via S_R = (35.16504 / 35) * S_P.
+
+    Returns
+    -------
+    ndarray or float
+        Kinematic viscosity in m2 s-1.
+
+    References
+    ----------
+    Sharqawy, M. H., Lienhard, J. H., & Zubair, S. M. (2010). Thermophysical
+    properties of seawater: a review of existing correlations and data.
+    Desalination and Water Treatment, 16, 354-380. doi:10.5004/dwt.2010.1079
+    """
+    t = np.asarray(temp)
+    s = np.asarray(sal) * 35.16504 / 35 / 1000
+    a = 1.541 + 1.998e-2 * t - 9.52e-5 * t**2
+    b = 7.974 - 7.561e-2 * t + 4.724e-4 * t**2
+    mu_w = 4.2844e-5 + 1 / (0.157 * (t + 64.993) ** 2 - 91.296)
+    mu_sw = mu_w * (1 + a * s + b * s**2)
+    return mu_sw / _density(temp, sal)
 
 
 def diffusivity_temp(temp: ArrayOrFloat, sal: ArrayOrFloat = 35.0) -> ArrayOrFloat:
