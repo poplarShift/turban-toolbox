@@ -2,7 +2,7 @@ import datetime
 from pytz import timezone
 import math
 import re
-from importlib.metadata import version as pkg_version
+from importlib.metadata import PackageNotFoundError, version as pkg_version
 
 import numpy
 import gsw
@@ -22,7 +22,10 @@ except ImportError:
         return datetime.datetime(1970, 1, 1)
 
 
-version = pkg_version("turban-toolbox")
+try:
+    version = pkg_version("turban-toolbox")
+except PackageNotFoundError:
+    version = "unknown"
 
 
 def read_mrd(filestream, header_only=False, pos_time_only=False) -> dict:
