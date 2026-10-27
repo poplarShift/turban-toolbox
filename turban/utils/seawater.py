@@ -1,17 +1,3 @@
-"""Molecular properties of seawater needed for scalar dissipation estimates.
-
-The functions follow the formulations used in the ODAS MATLAB library, so that
-results can be compared one-to-one with that toolbox:
-
-* kinematic viscosity: polynomial fit for salinity 35 (ODAS ``visc35``)
-* thermal diffusivity: k / (rho * c_p) with the seawater thermophysical
-  property correlations of Sharqawy, Lienhard & Zubair (2010),
-  Desalination and Water Treatment 16, 354-380.
-
-In addition, ``viscosity_kinematic_full`` gives the kinematic viscosity
-at arbitrary salinity from the Sharqawy et al. (2010) correlations.
-"""
-
 import numpy as np
 from jaxtyping import Float
 from numpy import ndarray
@@ -103,7 +89,7 @@ def viscosity_kinematic_full(temp: ArrayOrFloat, sal: ArrayOrFloat) -> ArrayOrFl
     ``mu_w`` the IAPWS 2008 pure water viscosity fit. Valid for
     0 <= T <= 180 degC and 0 <= S <= 150 g/kg with an accuracy of +-1.5 %.
     The pressure dependence (< 1 % over the oceanic range) is neglected.
-    Unlike ``viscosity_kinematic`` (ODAS ``visc35``) this is not restricted to
+    Unlike ``viscosity_kinematic`` this is not restricted to
     salinity 35.
 
     Parameters
@@ -126,12 +112,13 @@ def viscosity_kinematic_full(temp: ArrayOrFloat, sal: ArrayOrFloat) -> ArrayOrFl
     Desalination and Water Treatment, 16, 354-380. doi:10.5004/dwt.2010.1079
     """
     t = np.asarray(temp)
-    s = np.asarray(sal) * 35.16504 / 35 / 1000
+    sal_ref = np.asarray(sal) * 35.16504 / 35
+    s = sal_ref / 1000
     a = 1.541 + 1.998e-2 * t - 9.52e-5 * t**2
     b = 7.974 - 7.561e-2 * t + 4.724e-4 * t**2
     mu_w = 4.2844e-5 + 1 / (0.157 * (t + 64.993) ** 2 - 91.296)
     mu_sw = mu_w * (1 + a * s + b * s**2)
-    return mu_sw / _density(temp, sal)
+    return mu_sw / _density(temp, sal_ref)
 
 
 def diffusivity_temp(temp: ArrayOrFloat, sal: ArrayOrFloat = 35.0) -> ArrayOrFloat:
@@ -142,7 +129,7 @@ def diffusivity_temp(temp: ArrayOrFloat, sal: ArrayOrFloat = 35.0) -> ArrayOrFlo
     temp : ndarray or float
         Temperature in degrees Celsius.
     sal : ndarray or float, optional
-        Practical salinity. Default is 35, as used in ODAS.
+        Practical salinity. Default is 35.
 
     Returns
     -------
