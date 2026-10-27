@@ -1,7 +1,14 @@
 import numpy as np
 import pytest
 
-from turban.utils.seawater import viscosity_kinematic, viscosity_kinematic_full
+from turban.utils.seawater import (
+    _density,
+    _specific_heat,
+    _thermal_conductivity,
+    diffusivity_temp,
+    viscosity_kinematic,
+    viscosity_kinematic_full,
+)
 
 
 def test_viscosity_kinematic_simple_vs_full():
@@ -33,3 +40,24 @@ def test_viscosity_kinematic_full_salinity_deviation():
     # using the S=35 polynomial in fresher water stays within 2 %
     nu_poly = viscosity_kinematic(temp)
     np.testing.assert_allclose(nu_poly * np.ones_like(nu), nu, rtol=0.02)
+
+
+def test_seawater_properties_reference_values():
+    # Sharqawy et al. (2010) correlations at T=20 degC, S=35 vs. their tabulated
+    # values (rho ~ 1024.8 kg m-3, cp ~ 3993 J kg-1 K-1, k ~ 0.60 W m-1 K-1)
+    np.testing.assert_allclose(_density(20.0, 35.0), 1024.8, rtol=1e-3)
+    np.testing.assert_allclose(_specific_heat(20.0, 35.0), 3993.0, rtol=5e-3)
+    np.testing.assert_allclose(_thermal_conductivity(20.0, 35.0), 0.60, rtol=1e-2)
+
+
+def test_diffusivity_temp():
+    # thermal diffusivity of seawater is ~1.4-1.5e-7 m2 s-1 and increases with
+    # temperature; default salinity is 35
+    np.testing.assert_allclose(diffusivity_temp(20.0), 1.47e-7, rtol=1e-2)
+    assert diffusivity_temp(20.0) == diffusivity_temp(20.0, 35.0)
+    temp = np.linspace(-2, 30, 33)
+    kappa = diffusivity_temp(temp)
+    assert kappa.shape == temp.shape
+    assert np.all(np.diff(kappa) > 0)
+    assert np.all((kappa > 1.3e-7) & (kappa < 1.6e-7))
+
