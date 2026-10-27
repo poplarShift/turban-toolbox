@@ -2,6 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import json
 
+from turban.instruments.mss.api import mrd_to_level1
 from turban.instruments.mss.config import MssDeviceConfig
 from turban.instruments.mss.mss_mrd import read_mrd, raw_to_level0, level0_to_level1
 from turban.process.shear.api import ShearProcessing, ShearLevel1, ShearConfig
@@ -36,4 +37,15 @@ def test_mss():
         mss_conf2 = MssDeviceConfig.model_validate(json.load(f))
 
     assert mss_conf == mss_conf2
+
+    # full MRD -> ShearLevel1 path via the api, including derived aux data
+    cfg = ShearConfig(
+        sampfreq=1024.0,
+        segment_length=2048,
+        segment_overlap=1024,
+        chunk_length=4 * 2048,
+        chunk_overlap=1024,
+    )
+    level1 = mrd_to_level1(atomix_benchmark_baltic_mrd_fpath, "shear", cfg, mss_conf)
+    assert isinstance(level1, ShearLevel1)
 
