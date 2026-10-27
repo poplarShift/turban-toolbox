@@ -11,6 +11,7 @@ from turban.instruments.mss.config import MssDeviceConfig
 from turban.process.shear.config import ShearConfig
 from turban.process.shear.api import ShearLevel1
 from turban.utils.logging import get_logger
+from turban.utils.seawater import viscosity_kinematic
 
 logger = get_logger(__name__)
 
@@ -63,5 +64,7 @@ def mrd_to_level1(
 
     for varname in ["SA", "CT", "Press", "DENS"]:
         level1.add_aux_data(data_level1[varname].values, varname)
+
+    level1.add_aux_data(viscosity_kinematic(data_level1["CT"]), "molvisc")
 
     return level1
