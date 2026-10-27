@@ -50,6 +50,10 @@ AuxDataTypehintLevel34 = dict[
     tuple[
         list[str],  # list of dimensions (for xarray)
         Num[ndarray, "*any time_fast"],  # data
+        dict[  # netcdf attributes
+            str,  # e.g. "agg_method"
+            str,  # e.g. "mean"
+        ],
     ],
 ]
 
@@ -213,7 +217,10 @@ class AuxiliaryData(TimeseriesLevel):
         else:
             data = cast(AuxDataTypehintLevel34, self.aux_data)
             data_vars.update(
-                {varname: (dims, arr) for varname, (dims, arr) in data.items()}
+                {
+                    varname: (dims, arr, attr)
+                    for varname, (dims, arr, attr) in data.items()
+                }
             )
         return data_vars, coords
 
@@ -231,7 +238,11 @@ class AuxiliaryData(TimeseriesLevel):
     def _aux_from_xarray(
         cls, ds: xr.Dataset
     ) -> AuxDataTypehintLevel12 | AuxDataTypehintLevel34:
-        """Auxiliary data: all data variables not recognised as core fields."""
+        """Auxiliary data: all data variables not recognised as core fields.
+        
+        NB! TURBAN currently has no way of saving/loading aggregation instructions
+        for levels 1/2. This routine will assume a mean operation on level 1/2 aux
+        data and that the variable keeps its name into level 3/4."""
         hints = get_type_hints_recursive(cls)
         aux = {}
         for name, arr in ds.data_vars.items():
@@ -239,9 +250,9 @@ class AuxiliaryData(TimeseriesLevel):
                 continue
             logger.debug(f"Adding `{name}` to auxiliary data")
             if cls._level <= 2:
-                aux[name] = (list(arr.dims), arr.values, {"mean": None})
+                aux[name] = (list(arr.dims), arr.values, {"mean": name})
             else:
-                aux[name] = (list(arr.dims), arr.values)
+                aux[name] = (list(arr.dims), arr.values, ds[name].attrs)
         return aux
 
     @classmethod
@@ -510,6 +521,7 @@ class Level3[L: Level2](HasLevelBelow[L], AuxiliaryData):
                         chunk_overlap=chunk_overlap,
                         agg_method=agg_method,
                     ),
+                    {"agg_method": agg_method},
                 )
         return slow
 

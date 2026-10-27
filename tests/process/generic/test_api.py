@@ -77,7 +77,7 @@ def test_add_aux_data_name_out_level2_to_level3(agg_method, name_out, expected_n
     aux3 = Level3.from_level_below(level2)._aux_data
 
     assert list(aux3) == [expected_name]
-    dims, arr = aux3[expected_name]
+    dims, arr, _ = aux3[expected_name]
     assert dims == ["time"]
     np.testing.assert_allclose(arr, expected_agg(pres, agg_method))
 
