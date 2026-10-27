@@ -27,6 +27,7 @@ from turban.process.generic.api import (
     TimeseriesLevel,
 )
 from turban.utils.logging import get_logger
+from turban.utils.seawater import viscosity_kinematic
 
 logger = get_logger(__name__)
 
@@ -347,12 +348,13 @@ class ShearLevel4(Level4[ShearLevel3]):
         # so linters understand we have a dict after __post_init__
         aux_data = cast(dict, level3._aux_data)
         # try getting molvisc from level3, if not, use fallback value
-        molvisc = (
+        if "temp" in aux_data:
             # level 3 aux data entries are (dims, arr)
-            aux_data["molvisc"][1]
-            if "molvisc" in aux_data
-            else level3.cfg.molvisc_fallback
-        )
+            molvisc = viscosity_kinematic(aux_data["temp"][1])
+            logger.debug(f"Calculated molecular viscosity from `temp`")
+        else:
+            molvisc = level3.cfg.molvisc_fallback
+            logger.debug(f"Used fallback value {molvisc} for molecular viscosity")
 
         (
             eps,
