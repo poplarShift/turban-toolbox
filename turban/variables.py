@@ -9,6 +9,7 @@ To make alphabetic sorting easier, this is here coded as the simpler dictionary 
 {turban_standard_name/attribute_name: attribute_value}
 """
 
+from typing import Literal
 from collections import defaultdict
 
 # Physical quantities used in the code base
@@ -68,7 +69,7 @@ _vars = {
 
 def _to_dict(vars):
     """Transform a flat dictionary into a nested variable-attribute structure.
-    
+
     This function may vanish at any time - its only purpose is converting _vars
     to VARIABLES.
 
@@ -91,3 +92,10 @@ def _to_dict(vars):
 
 
 VARIABLES = _to_dict(_vars)
+
+# Standard names of CTD-type auxiliary variables an instrument sensor can be mapped to
+# (e.g. `MssDeviceConfig.sensornames_ctd`). They specifically denote:
+#   cond: sea water conductivity
+#   press: sea water pressure
+#   temp: in-situ sea water temperature (ITS-90)
+STANDARD_CTD_TYPE = Literal["cond", "press", "temp"]

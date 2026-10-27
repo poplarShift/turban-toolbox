@@ -38,6 +38,9 @@ mss_conf = MssDeviceConfig.from_mrd(
         "SHE1": 3.90e-4,
         "SHE2": 4.05e-4,
     },  # sensors 32 and 33 (MSS038)
+    # link the standard ctd names (turban.variables.STANDARD_CTD_TYPE) to the
+    # sensor names in the MRD header; guessing them when omitted is deprecated
+    sensornames_ctd={"cond": "COND", "temp": "TEMP", "press": "PRESS"},
     offset=0,
 )
 

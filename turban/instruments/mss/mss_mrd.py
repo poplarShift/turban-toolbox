@@ -362,7 +362,6 @@ def raw_to_level0(mss_config, rawdata: dict[str, list]) -> xr.Dataset:
 
 
 def level0_to_level1(mss_config, level0, pspd_rel=None) -> xr.Dataset:
-    logger.debug("Pressure sensor:{}".format(mss_config.pressure_sensorname))
     logger.debug("Keys of level0 data:{}".format(level0.keys()))
     if True:
         # Loop over all shear sensors and calculate shear
