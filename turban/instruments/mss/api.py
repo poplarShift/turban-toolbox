@@ -65,6 +65,6 @@ def mrd_to_level1(
     for varname in ["SA", "CT", "Press", "DENS"]:
         level1.add_aux_data(data_level1[varname].values, varname)
 
-    level1.add_aux_data(viscosity_kinematic(data_level1["CT"]), "molvisc")
+    level1.add_aux_data(viscosity_kinematic(data_level1["CT"]).values, "molvisc")
 
     return level1
