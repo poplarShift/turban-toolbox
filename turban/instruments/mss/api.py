@@ -11,10 +11,13 @@ from turban.instruments.mss.config import MssDeviceConfig
 from turban.process.shear.config import ShearConfig
 from turban.process.shear.api import ShearLevel1
 from turban.utils.logging import get_logger
-from turban.utils.seawater import viscosity_kinematic
 from turban.variables import STANDARD_CTD_TYPE
 
 logger = get_logger(__name__)
+
+# Sensors added as aux data under their own name, if present
+# TODO: handle other sensors (Chl-a etc)
+AUX_SENSORNAMES = ["ACC", "Chl_A", "ACCx", "ACCy"]
 
 
 def mrd_to_level1(
@@ -36,16 +39,18 @@ def mrd_to_level1(
     ignored.
 
     Missing data records (detected from the COUNT channel) are handled according
-    to `missing`, see `mss_mrd.level0_to_level1`.
+    to `missing`, see `mss_mrd.mrd_calibrate`.
+
+    section_number is set to 0 (discard) everywhere and has to be set by the user
+    before processing.
     """
     if mss_cfg is None:
-        # in this case, shear_sensitivities must not be None
-        shear_sensitivities = cast(dict[str, float], shear_sensitivities)
+        if shear_sensitivities is None:
+            raise ValueError("shear_sensitivities is required if mss_cfg is not given")
         mss_cfg = MssDeviceConfig.from_mrd(
             filename=fname,
             shear_sensitivities=shear_sensitivities,
             sensornames_ctd=sensornames_ctd,
-            offset=0,
         )
     elif sensornames_ctd is not None:
         logger.warning(
@@ -54,39 +59,47 @@ def mrd_to_level1(
 
     with open(fname, "rb") as f:
         data_raw = mss_mrd.read_mrd(f)
-
-    data_level0 = mss_mrd.raw_to_level0(mss_cfg, data_raw)
-    data_level1 = mss_mrd.level0_to_level1(mss_cfg, data_level0, missing=missing)
+    data = mss_mrd.mrd_calibrate(mss_cfg, data_raw, missing=missing)
 
     # physical time if the MRD file contains a time packet, else seconds
-    time = np.asarray(data_level1["time"])
+    time = data["time"].values
+
+    # Sections are user-defined and should not be set here. All 0 (discard) for now,
+    # setting them will be removed from mrd_to_level1.
+    logger.warning(
+        "Deprecated: mrd_to_level1 sets section_number to 0 (discard) everywhere, "
+        "set section_number before processing."
+    )
+    section_number = np.zeros(len(time), dtype=int)
 
     if target == "shear":
         level1 = ShearLevel1(
             time=time,
-            senspeed=np.asarray(data_level1["PSPD_REL"]),
-            shear=np.asarray(data_level1["SHEAR"]),
-            section_number=np.ones_like(data_level1["time_count"], dtype=int),
+            senspeed=data["PSPD_REL"].values,
+            shear=data["SHEAR"].values,
+            section_number=section_number,
             cfg=cast(ShearConfig, proc_cfg),
         )
 
     elif target == "utemp":
+        if "utemp" not in data:
+            raise ValueError("utemp needs the sensors NTC and NTCHP")
         level1 = UTempLevel1(
             time=time,
-            senspeed=np.asarray(data_level1["PSPD_REL"]),
-            dtempdt=np.asarray(data_level1["utemp"]),
-            section_number=np.ones_like(data_level1["time_count"], dtype=int),
+            senspeed=data["PSPD_REL"].values,
+            dtempdt=data["utemp"].values,
+            section_number=section_number,
             cfg=cast(UTempConfig, proc_cfg),
         )
 
-    # TODO: handle other sensors (ACC, Chl-a etc)
     for k, v in mss_cfg.sensornames_ctd.items():
-        level1.add_aux_data(data_level1[v].values, name=k, name_out=k)
+        level1.add_aux_data(data[v].values, name=k, name_out=k)
 
-    for v in ["ACC", "Chl_A", "ACCx", "ACCy"]:
-        if v in data_level1:
-            level1.add_aux_data(data_level1[v].values, name=v, name_out=v)
-        else:
-            logger.info(f"Variable {v} not present in data")
+    absent = [v for v in AUX_SENSORNAMES if v not in data]
+    if absent:
+        logger.info("Sensors %s not present in data", absent)
+    for v in AUX_SENSORNAMES:
+        if v in data:
+            level1.add_aux_data(data[v].values, name=v, name_out=v)
 
     return level1

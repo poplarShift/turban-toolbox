@@ -3,13 +3,13 @@ import matplotlib.pyplot as plt
 import json
 import pytest
 from beartype.roar import BeartypeCallHintParamViolation
+from pydantic import ValidationError
 
 from turban.instruments.mss.api import mrd_to_level1
-from turban.instruments.mss.config import MssDeviceConfig
+from turban.instruments.mss.config import MssDeviceConfig, MssShearSensor
 from turban.instruments.mss.mss_mrd import (
     read_mrd,
-    raw_to_level0,
-    level0_to_level1,
+    mrd_calibrate,
     count_to_time,
 )
 from turban.process.shear.api import ShearProcessing, ShearLevel1, ShearConfig
@@ -20,7 +20,7 @@ SENSORNAMES_CTD = {"cond": "COND", "temp": "TEMP", "press": "PRESS"}
 
 
 @pytest.fixture(scope="module")
-def mss_conf_and_level0():
+def mss_conf_and_raw():
     mss_conf = MssDeviceConfig.from_mrd(
         filename=atomix_benchmark_baltic_mrd_fpath,
         shear_sensitivities=SHEAR_SENSITIVITIES,
@@ -28,7 +28,7 @@ def mss_conf_and_level0():
     )
     with open(atomix_benchmark_baltic_mrd_fpath, "rb") as f:
         data_raw = read_mrd(f)
-    return mss_conf, raw_to_level0(mss_conf, data_raw)
+    return mss_conf, data_raw
 
 
 def test_count_to_time():
@@ -55,26 +55,36 @@ def test_count_to_time_duplicate(caplog):
 
 
 @pytest.mark.parametrize("missing", [None, "nan", "interpolate"])
-def test_level0_to_level1_missing(mss_conf_and_level0, missing):
+def test_mrd_calibrate_missing(mss_conf_and_raw, missing):
     # SH2_0330.MRD has no missing records, so simulate a gap of two records
-    mss_conf, level0 = mss_conf_and_level0
-    nrecords = len(level0["index"])
-    level0_gap = level0.drop_isel(index=[1000, 1001])
-    level1 = level0_to_level1(mss_conf, level0_gap, missing=missing)
+    mss_conf, data_raw = mss_conf_and_raw
+    nrecords = data_raw["numsamples"]
+    data_raw_gap = dict(
+        data_raw,
+        channels=np.delete(data_raw["channels"], [1000, 1001], axis=0),
+        numsamples=nrecords - 2,
+    )
+    data = mrd_calibrate(mss_conf, data_raw_gap, missing=missing)
 
-    assert np.issubdtype(level1["time"].dtype, np.datetime64)
-    dt = np.diff(level1["time_count"].values) * mss_conf.sampling_freq
-    press = level1["PRESS"].values
+    assert np.issubdtype(data["time"].dtype, np.datetime64)
+    dt = np.diff(data["time_count"].values) * mss_conf.sampling_freq
+    press = data["PRESS"].values
     if missing is None:
-        assert level1.sizes["time"] == nrecords - 2
+        assert data.sizes["time"] == nrecords - 2
         np.testing.assert_allclose(np.unique(dt), [1, 3])
         assert not np.isnan(press).any()
     else:
-        assert level1.sizes["time"] == nrecords
+        assert data.sizes["time"] == nrecords
         np.testing.assert_allclose(dt, 1)
+        np.testing.assert_array_equal(np.flatnonzero(data["inserted"]), [1000, 1001])
         if missing == "nan":
             assert np.isnan(press).sum() == 2
             assert np.isnan(press[1000:1002]).all()
+            # NaN must not spread through the filters of the derived quantities
+            for v in ["PSPD_REL", "SHEAR", "utemp"]:
+                isnan = np.isnan(data[v].values)
+                assert isnan[..., 1000:1002].all()
+                assert not isnan[..., :1000].any() and not isnan[..., 1002:].any()
         else:
             assert not np.isnan(press).any()
             np.testing.assert_allclose(
@@ -83,10 +93,16 @@ def test_level0_to_level1_missing(mss_conf_and_level0, missing):
             )
 
 
-def test_level0_to_level1_missing_invalid(mss_conf_and_level0):
-    mss_conf, level0 = mss_conf_and_level0
+def test_mrd_calibrate_missing_invalid(mss_conf_and_raw):
+    mss_conf, data_raw = mss_conf_and_raw
     with pytest.raises(BeartypeCallHintParamViolation):
-        level0_to_level1(mss_conf, level0, missing="zero")
+        mrd_calibrate(mss_conf, data_raw, missing="zero")
+
+
+def test_shear_sensor_name():
+    MssShearSensor(name="SHE3", coefficients=[0, 1], channel=1, sensitivity=4e-4)
+    with pytest.raises(ValidationError):
+        MssShearSensor(name="She3", coefficients=[0, 1], channel=1, sensitivity=4e-4)
 
 
 def test_from_mrd_guessing_sensornames_ctd_deprecated(caplog):
@@ -108,7 +124,7 @@ def test_from_mrd_unknown_sensornames_ctd():
         )
 
 
-def test_mrd_to_level1_without_mss_cfg():
+def test_mrd_to_level1_without_mss_cfg(caplog):
     cfg = ShearConfig(
         sampfreq=1024.0,
         segment_length=2048,
@@ -116,14 +132,18 @@ def test_mrd_to_level1_without_mss_cfg():
         chunk_length=4 * 2048,
         chunk_overlap=1024,
     )
-    level1 = mrd_to_level1(
-        atomix_benchmark_baltic_mrd_fpath,
-        "shear",
-        cfg,
-        shear_sensitivities=SHEAR_SENSITIVITIES,
-        sensornames_ctd=SENSORNAMES_CTD,
-    )
+    with caplog.at_level("WARNING"):
+        level1 = mrd_to_level1(
+            atomix_benchmark_baltic_mrd_fpath,
+            "shear",
+            cfg,
+            shear_sensitivities=SHEAR_SENSITIVITIES,
+            sensornames_ctd=SENSORNAMES_CTD,
+        )
     assert isinstance(level1, ShearLevel1)
+    # section_number has to be set by the user
+    assert (level1.section_number == 0).all()
+    assert "set section_number before processing" in caplog.text
 
 
 def test_mss():
@@ -141,9 +161,8 @@ def test_mss():
 
     with open(atomix_benchmark_baltic_mrd_fpath, "rb") as f:
         data_raw = read_mrd(f)
-    data_level0 = raw_to_level0(mss_conf, data_raw)
-
-    data_level1 = level0_to_level1(mss_conf, data_level0)
+    data = mrd_calibrate(mss_conf, data_raw)
+    assert "SHEAR" in data and "SHE1" not in data
 
     # save an existing configuration
     with open(f"out/tests/instruments/mss/SH2_0330_config.json", "w") as f:

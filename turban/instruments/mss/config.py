@@ -1,14 +1,11 @@
-from typing import Literal, Union, Optional, Annotated
-import sys
-from typing import cast
+import re
 from pathlib import Path
-import numpy as np
-from pydantic import BaseModel, Field
+from typing import Annotated, Any, Literal
 
-from turban.instruments.mss import mss_mrd
+import numpy as np
+from pydantic import BaseModel, Field, PrivateAttr, model_validator
+
 from turban.variables import STANDARD_CTD_TYPE
-from turban.process.shear.config import ShearConfig
-from turban.process.shear.api import ShearLevel1
 from turban.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -21,9 +18,15 @@ mss_standard_ctd_sensornames["press"] = ["PRESS", "P250", "P1000"]
 mss_standard_ctd_sensornames["temp"] = ["TEMP", "NTC"]
 mss_standard_ctd_sensornames["cond"] = ["COND"]
 
+# Shear sensors must be named SHE<n>
+MSS_SENSORNAME_SHEAR = r"^SHE\d+$"
+
 
 class MssSensor(BaseModel):
-    name: str
+    name: str = Field(
+        description="Sensor name. Sensors with a fixed role are accessed by these "
+        "exact names: COUNT, PRESS, TEMP, NTC, NTCHP, ACC, ACCx, ACCy"
+    )
     coefficients: list[float]
     channel: int
     unit: str = Field(default="")
@@ -31,20 +34,12 @@ class MssSensor(BaseModel):
 
 
 class MssSensorPoly(MssSensor):
+    """Polynomial calibration with all coefficients."""
+
     calibration_type: Literal["N"] = Field(default="N")
+    _p: np.polynomial.Polynomial = PrivateAttr()
 
-    def __init__(self, *args, **kwargs):
-        """Initialize and build the calibration polynomial from coefficients.
-
-        Parameters
-        ----------
-        *args
-            Positional arguments passed to pydantic BaseModel.
-        **kwargs
-            Keyword arguments passed to pydantic BaseModel. Expected keys include
-            `name`, `coefficients`, `channel`, and optional `unit`.
-        """
-        super().__init__(*args, **kwargs)
+    def model_post_init(self, context: Any, /) -> None:
         self._p = np.polynomial.Polynomial(self.coefficients)
 
     def raw_to_units(self, rawdata, offset=0):
@@ -62,33 +57,25 @@ class MssSensorPoly(MssSensor):
         ndarray
             Calibrated data in physical units.
         """
-        data = self._p(rawdata + offset)
-        return data
+        return self._p(rawdata + offset)
 
 
 class MssShearSensor(MssSensor):
+    """Shear sensor, the coefficients are derived from `sensitivity`."""
+
+    name: Annotated[str, Field(pattern=MSS_SENSORNAME_SHEAR)]
     sensitivity: float
     serial_number: str = Field(default="")
     reference_temperature: float | None = None
     calibration_date: str = Field(default="")
     calibration_type: Literal["SHE"] = Field(default="SHE")
+    _p: np.polynomial.Polynomial = PrivateAttr()
 
-    def __init__(self, *args, **kwargs):
-        """Initialize and compute calibration coefficients from sensitivity.
-
-        Parameters
-        ----------
-        *args
-            Positional arguments passed to pydantic BaseModel.
-        **kwargs
-            Keyword arguments passed to pydantic BaseModel. Expected keys include
-            `name`, `sensitivity`, `channel`, and optional `unit`.
-            Coefficients are derived from `sensitivity` and stored in `coefficients`.
-        """
-        super().__init__(*args, **kwargs)
-        self.coefficients = [None, None]
-        self.coefficients[0] = 1.47133e-6 / self.sensitivity
-        self.coefficients[1] = 2.94266e-6 / self.sensitivity
+    def model_post_init(self, context: Any, /) -> None:
+        self.coefficients = [
+            1.47133e-6 / self.sensitivity,
+            2.94266e-6 / self.sensitivity,
+        ]
         self._p = np.polynomial.Polynomial(self.coefficients)
 
     def raw_to_units(self, rawdata, offset=0):
@@ -106,26 +93,16 @@ class MssShearSensor(MssSensor):
         ndarray
             Calibrated shear in physical units.
         """
-        data = self._p(rawdata - offset)  # The shear sensors have the negative offset
-        return data
+        return self._p(rawdata - offset)  # The shear sensors have the negative offset
 
 
 class MssSensorPressure(MssSensor):
+    """Pressure, polynomial from all but the last coefficient, which is a zero offset."""
+
     calibration_type: Literal["P"] = Field(default="P")
+    _p: np.polynomial.Polynomial = PrivateAttr()
 
-    def __init__(self, *args, **kwargs):
-        """Initialize and build pressure calibration polynomial.
-
-        Parameters
-        ----------
-        *args
-            Positional arguments passed to pydantic BaseModel.
-        **kwargs
-            Keyword arguments passed to pydantic BaseModel. Expected keys include
-            `name`, `coefficients`, `channel`, and optional `unit`.
-            The polynomial is built from all but the last coefficient.
-        """
-        super().__init__(*args, **kwargs)
+    def model_post_init(self, context: Any, /) -> None:
         self._p = np.polynomial.Polynomial(self.coefficients[:-1])
 
     def raw_to_units(self, rawdata, offset=0):
@@ -143,40 +120,26 @@ class MssSensorPressure(MssSensor):
         ndarray
             Calibrated pressure; the last coefficient is subtracted as a zero-offset.
         """
-        data = self._p(rawdata + offset) - self.coefficients[-1]
-        return data
+        return self._p(rawdata + offset) - self.coefficients[-1]
 
 
 class MssSensorNTC(MssSensor):
-    """
-    Steinhart/Hart NTC Polynomial
-    """
+    """Steinhart/Hart NTC polynomial from all but the last coefficient."""
 
     calibration_type: Literal["SHH"] = Field(default="SHH")
+    _p: np.polynomial.Polynomial = PrivateAttr()
 
-    def __init__(self, *args, **kwargs):
-        """Initialize and build Steinhart-Hart calibration polynomial.
-
-        Parameters
-        ----------
-        *args
-            Positional arguments passed to pydantic BaseModel.
-        **kwargs
-            Keyword arguments passed to pydantic BaseModel. Expected keys include
-            `name`, `coefficients`, `channel`, and optional `unit`.
-            The polynomial is built from all but the last coefficient.
-        """
-        super().__init__(*args, **kwargs)
+    def model_post_init(self, context: Any, /) -> None:
         self._p = np.polynomial.Polynomial(self.coefficients[:-1])
 
-    def raw_to_units(self, rawdata, offset):
+    def raw_to_units(self, rawdata, offset=0):
         """Apply Steinhart-Hart NTC calibration to raw data.
 
         Parameters
         ----------
         rawdata : array_like
             Raw resistance counts.
-        offset : float
+        offset : float, optional
             Additive offset applied before taking the natural log.
 
         Returns
@@ -185,40 +148,27 @@ class MssSensorNTC(MssSensor):
             Temperature in degrees Celsius.
         """
         data = self._p(np.log(rawdata + offset))
-        data = 1 / data - 273.15  # Kelvin to degC
-        return data
+        return 1 / data - 273.15  # Kelvin to degC
 
 
 class MssSensorTurb(MssSensor):
-    """
-    Convert rawdata turbidity to NFC
-    """
+    """Turbidity (NFC), polynomial from all but the last two coefficients, which
+    are an offset and a factor."""
 
     calibration_type: Literal["NFC"] = Field(default="NFC")
+    _p: np.polynomial.Polynomial = PrivateAttr()
 
-    def __init__(self, *args, **kwargs):
-        """Initialize and build turbidity calibration polynomial.
+    def model_post_init(self, context: Any, /) -> None:
+        self._p = np.polynomial.Polynomial(self.coefficients[:-2])
 
-        Parameters
-        ----------
-        *args
-            Positional arguments passed to pydantic BaseModel.
-        **kwargs
-            Keyword arguments passed to pydantic BaseModel. Expected keys include
-            `name`, `coefficients`, `channel`, and optional `unit`.
-            The polynomial is built from all but the last coefficient.
-        """
-        super().__init__(*args, **kwargs)
-        self._p = np.polynomial.Polynomial(self.coefficients[:-1])
-
-    def raw_to_units(self, rawdata, offset):
+    def raw_to_units(self, rawdata, offset=0):
         """Apply turbidity (NFC) calibration to raw data.
 
         Parameters
         ----------
         rawdata : array_like
             Raw sensor counts.
-        offset : float
+        offset : float, optional
             Additive offset applied before polynomial evaluation.
 
         Returns
@@ -226,47 +176,29 @@ class MssSensorTurb(MssSensor):
         ndarray
             Calibrated turbidity in physical units.
         """
-        p = np.polynomial.Polynomial(self.coefficients[:-2])
-        data = p(rawdata + offset) * self.coefficients[-1] + self.coefficients[-2]
-        return data
+        return self._p(rawdata + offset) * self.coefficients[-1] + self.coefficients[-2]
 
 
 class MssSensorOptode(MssSensor):
-    """
-    Convert oxygen optode rawdata to physical units
-    """
+    """Oxygen optode, raw to mV with coefficients[0:2], then mV to O2 with the zero
+    point correction coefficients[-2:]."""
 
     calibration_type: Literal["V04"] = Field(default="V04")
+    _p1: np.polynomial.Polynomial = PrivateAttr()
+    _p2: np.polynomial.Polynomial = PrivateAttr()
 
-    def __init__(self, *args, **kwargs):
-        """Initialize and build two-stage optode calibration polynomials.
+    def model_post_init(self, context: Any, /) -> None:
+        self._p1 = np.polynomial.Polynomial(self.coefficients[0:2])
+        self._p2 = np.polynomial.Polynomial(self.coefficients[-2:])
 
-        Parameters
-        ----------
-        *args
-            Positional arguments passed to pydantic BaseModel.
-        **kwargs
-            Keyword arguments passed to pydantic BaseModel. Expected keys include
-            `name`, `coefficients`, `channel`, and optional `unit`.
-            Two polynomials are built: `_p1` from coefficients[0:2] (raw-to-mV)
-            and `_p2` from coefficients[-2:] (mV-to-O2, zero-point correction).
-        """
-        super().__init__(*args, **kwargs)
-        self._p1 = np.polynomial.Polynomial(
-            self.coefficients[0:2]
-        )  # Convert data to mV
-        self._p2 = np.polynomial.Polynomial(
-            self.coefficients[-2:]
-        )  # 0 Point correction with B0 and B1
-
-    def raw_to_units(self, rawdata, offset):
+    def raw_to_units(self, rawdata, offset=0):
         """Apply two-stage oxygen optode calibration to raw data.
 
         Parameters
         ----------
         rawdata : array_like
             Raw sensor counts.
-        offset : float
+        offset : float, optional
             Additive offset applied in the first conversion stage.
 
         Returns
@@ -274,26 +206,16 @@ class MssSensorOptode(MssSensor):
         ndarray
             Calibrated oxygen concentration in physical units.
         """
-        data_mV = self._p1(rawdata + offset)
-        data = self._p2(data_mV)
-        return data
+        return self._p2(self._p1(rawdata + offset))
 
 
 class MssSensorOptodeInternalTemp(MssSensor):
+    """Internal temperature of the oxygen optode, polynomial with all coefficients."""
+
     calibration_type: Literal["N24"] = Field(default="N24")
+    _p: np.polynomial.Polynomial = PrivateAttr()
 
-    def __init__(self, *args, **kwargs):
-        """Initialize and build calibration polynomial for optode internal temperature.
-
-        Parameters
-        ----------
-        *args
-            Positional arguments passed to pydantic BaseModel.
-        **kwargs
-            Keyword arguments passed to pydantic BaseModel. Expected keys include
-            `name`, `coefficients`, `channel`, and optional `unit`.
-        """
-        super().__init__(*args, **kwargs)
+    def model_post_init(self, context: Any, /) -> None:
         self._p = np.polynomial.Polynomial(self.coefficients)
 
     def raw_to_units(self, rawdata, offset=0):
@@ -311,8 +233,18 @@ class MssSensorOptodeInternalTemp(MssSensor):
         ndarray
             Calibrated temperature in physical units.
         """
-        data = self._p(rawdata + offset)
-        return data
+        return self._p(rawdata + offset)
+
+
+# Sensor class per calibration type in the MRD header ("N" is MssShearSensor for SHE<n>)
+mss_sensor_classes: dict[str, type[MssSensor]] = {
+    "N": MssSensorPoly,
+    "SHH": MssSensorNTC,
+    "P": MssSensorPressure,
+    "V04": MssSensorOptode,
+    "N24": MssSensorOptodeInternalTemp,
+    "NFC": MssSensorTurb,
+}
 
 
 class MssDeviceConfig(BaseModel):
@@ -330,33 +262,46 @@ class MssDeviceConfig(BaseModel):
     sensors: dict[
         str,
         Annotated[
-            Union[
-                MssSensor,
-                MssSensorPoly,
-                MssShearSensor,
-                MssSensorPressure,
-                MssSensorNTC,
-                MssSensorTurb,
-                MssSensorOptode,
-                MssSensorOptodeInternalTemp,
-            ],
+            MssSensor
+            | MssSensorPoly
+            | MssShearSensor
+            | MssSensorPressure
+            | MssSensorNTC
+            | MssSensorTurb
+            | MssSensorOptode
+            | MssSensorOptodeInternalTemp,
             Field(discriminator="calibration_type"),
         ],
     ] = Field(
-        default={}, description="A dictionary of the sensors mounted to the probe"
+        default_factory=dict,
+        description="A dictionary of the sensors mounted to the probe",
     )
     sensornames_ctd: dict[STANDARD_CTD_TYPE, str] = Field(
-        default={"cond": "", "temp": "", "press": ""},
+        default_factory=lambda: {"cond": "", "temp": "", "press": ""},
         description="A dictionary to link standard ctd names to the names of the MSS config",
     )
     pspd_rel_method: Literal["pressure", "constant", "external"] = Field(
         default="pressure",
         description="Method for the platform speed relative to the seawater, this is needed to calculate wavenumbers from the sampled data",
     )
-    pspd_rel_constant_vel: Optional[float] = Field(
+    pspd_rel_constant_vel: float | None = Field(
         default=None,
         description='Constant velocity [m/s] used as pspd_rel, if defined by "pspd_rel_method"',
     )
+
+    @model_validator(mode="after")
+    def _check_sensornames(self) -> "MssDeviceConfig":
+        for key, sensor in self.sensors.items():
+            if key != sensor.name:
+                raise ValueError(
+                    f"Sensor key {key!r} differs from its name {sensor.name!r}"
+                )
+        for ctd_sensor, name in self.sensornames_ctd.items():
+            if name and name not in self.sensors:
+                raise ValueError(
+                    f"sensornames_ctd[{ctd_sensor!r}] = {name!r} is not in sensors"
+                )
+        return self
 
     @classmethod
     def from_mrd(
@@ -367,6 +312,8 @@ class MssDeviceConfig(BaseModel):
         offset: int = 0,
     ):
         """Create a MssDeviceConfig from an MRD file.
+
+        Polynomial sensors named SHE<n> in the header become shear sensors.
 
         Parameters
         ----------
@@ -389,146 +336,79 @@ class MssDeviceConfig(BaseModel):
         MssDeviceConfig
             Configuration object with sensors parsed from the MRD file header.
         """
-        self = cls()
-        logger.debug("Opening file:{}".format(filename))
-        mrd_file = open(filename, "rb")
-        data = mss_mrd.read_mrd(filestream=mrd_file, header_only=True)
-        logger.debug("Closing file:{}".format(filename))
-        mrd_file.close()
-        header_raw = data["header"]
-        header = mss_mrd.parse_header(header_raw)
+        # local import, mss_mrd imports from this module
+        from turban.instruments.mss import mss_mrd
+
+        logger.debug("Reading header of %s", filename)
+        with open(filename, "rb") as f:
+            header_raw = mss_mrd.read_mrd(filestream=f, header_only=True)["header"]
+        channels = mss_mrd.parse_header(header_raw)["mss"]["channels"]
+
+        sensors: dict[str, MssSensor] = {}
+        for ch, sensor_dict in channels.items():
+            sensorname = sensor_dict["name"]
+            caltype = sensor_dict["caltype"].upper()
+            kwargs = dict(
+                channel=ch,
+                name=sensorname,
+                coefficients=sensor_dict["coeff"],
+                unit=sensor_dict["unit"],
+            )
+            logger.debug(
+                "Channel %s, sensorname %s, caltype %s", ch, sensorname, caltype
+            )
+            if caltype == "N" and re.fullmatch(MSS_SENSORNAME_SHEAR, sensorname):
+                sensors[sensorname] = MssShearSensor(
+                    sensitivity=shear_sensitivities[sensorname], **kwargs
+                )
+            elif caltype in mss_sensor_classes:
+                sensors[sensorname] = mss_sensor_classes[caltype](**kwargs)
+            else:
+                logger.info(
+                    "Skipping sensor %s with unknown calibration type %s",
+                    sensorname,
+                    caltype,
+                )
+
+        sensornames = [c["name"] for c in channels.values()]
         if sensornames_ctd is not None:
-            sensornames = [
-                header["mss"]["channels"][ch]["name"]
-                for ch in header["mss"]["channels"]
-            ]
             missing = set(sensornames_ctd.values()) - set(sensornames)
             if missing:
                 raise ValueError(
                     f"Sensors {sorted(missing)} given in sensornames_ctd not found in "
                     f"MRD header of {filename}, available: {sensornames}"
                 )
-            self.sensornames_ctd = dict(sensornames_ctd)
         else:
             logger.warning(
                 "Deprecated: guessing sensornames_ctd from standard sensor names, "
                 "pass sensornames_ctd explicitly."
             )
-        # Check for CTD sensors and link names
-        for ctd_sensor in self.sensornames_ctd.keys():
-            sensorname_mss = self.sensornames_ctd[ctd_sensor]
-            if len(sensorname_mss) == 0:
-                logger.debug("Searching for sensor of {}".format(ctd_sensor))
-                sensornames = [
-                    header["mss"]["channels"][ch]["name"]
-                    for ch in header["mss"]["channels"]
-                ]
-                sensornames_casefold = [
-                    header["mss"]["channels"][ch]["name"].casefold()
-                    for ch in header["mss"]["channels"]
-                ]
-                for k in mss_standard_ctd_sensornames.get(
-                    ctd_sensor, []
-                ):  # Loop over the stanndard names
+            sensornames_ctd = {"cond": "", "temp": "", "press": ""}
+            sensornames_casefold = [s.casefold() for s in sensornames]
+            for ctd_sensor in sensornames_ctd:
+                for k in mss_standard_ctd_sensornames.get(ctd_sensor, []):
                     if k.casefold() in sensornames_casefold:
-                        index_sensor = sensornames_casefold.index(k.casefold())
-                        sensorname_mss = sensornames[index_sensor]
+                        sensorname = sensornames[
+                            sensornames_casefold.index(k.casefold())
+                        ]
                         logger.debug(
-                            "\tFound MSS sensor {} for {}".format(
-                                sensorname_mss, ctd_sensor
-                            )
+                            "Found MSS sensor %s for %s", sensorname, ctd_sensor
                         )
-                        self.sensornames_ctd[ctd_sensor] = sensorname_mss
+                        sensornames_ctd[ctd_sensor] = sensorname
                         break
 
-        # Fill in sensors from header
-        for ch in header["mss"]["channels"]:
-            sensor_dict = header["mss"]["channels"][ch]
-            sensorname = sensor_dict["name"]
-            unit = sensor_dict["unit"]
-            caltype = sensor_dict["caltype"].upper()
-            logger.debug(
-                "Checking Channel:{}, sensorname:{}, caltype:{}".format(
-                    ch, sensorname, caltype
-                )
-            )
-            if caltype == "N":  # Polynom
-                if sensorname.upper().startswith("SHE"):
-                    logger.debug("\tAdding shear sensor {}".format(sensorname))
-                    sensitivity = shear_sensitivities[sensorname]
-                    self.sensors[sensorname] = MssShearSensor(
-                        channel=ch,
-                        name=sensorname,
-                        coefficients=sensor_dict["coeff"],
-                        unit=unit,
-                        sensitivity=sensitivity,
-                    )
-                else:
-                    logger.debug(
-                        "\tAdding standard polynomial sensor {}".format(sensorname)
-                    )
-                    self.sensors[sensorname] = MssSensorPoly(
-                        channel=ch,
-                        name=sensorname,
-                        coefficients=sensor_dict["coeff"],
-                        unit=unit,
-                    )
-            elif caltype == "SHH":
-                logger.debug("\tAdding NTC sensor {}".format(sensorname))
-                self.sensors[sensorname] = MssSensorNTC(
-                    channel=ch,
-                    name=sensorname,
-                    coefficients=sensor_dict["coeff"],
-                    unit=unit,
-                )
-            elif caltype == "P":  # Pressure
-                logger.debug("\tAdding pressure sensor {}".format(sensorname))
-                self.sensors[sensorname] = MssSensorPressure(
-                    channel=ch,
-                    name=sensorname,
-                    coefficients=sensor_dict["coeff"],
-                    unit=unit,
-                )
-            elif caltype == "V04":  # Oxygen
-                logger.debug("\tAdding oxygen optode sensor {}".format(sensorname))
-                self.sensors[sensorname] = MssSensorOptode(
-                    channel=ch,
-                    name=sensorname,
-                    coefficients=sensor_dict["coeff"],
-                    unit=unit,
-                )
-            elif caltype == "N24":  # Internal temperature of oxygensensor
-                logger.debug(
-                    "\tAdding oxygen optode temperature sensor {}".format(sensorname)
-                )
-                self.sensors[sensorname] = MssSensorOptodeInternalTemp(
-                    channel=ch,
-                    name=sensorname,
-                    coefficients=sensor_dict["coeff"],
-                    unit=unit,
-                )
-            elif caltype == "NFC":  # Turbidity etc.
-                logger.debug("\tAdding NFC sensor {}".format(sensorname))
-                self.sensors[sensorname] = MssSensorTurb(
-                    channel=ch,
-                    name=sensorname,
-                    coefficients=sensor_dict["coeff"],
-                    unit=unit,
-                )
-        # print('Header', header['channels'])
-
-        return self
+        return cls(offset=offset, sensors=sensors, sensornames_ctd=sensornames_ctd)
 
     @classmethod
-    def from_prb(cls, filename, shear_sensitivities=[None, None], offset=0):
+    def from_prb(cls, filename, shear_sensitivities=None, offset=0):
         """Create a MssDeviceConfig from a PRB file.
 
         Parameters
         ----------
         filename : str or Path
             Path to the PRB file.
-        shear_sensitivities : list, optional
-            Shear sensitivity values (default [None, None]).
+        shear_sensitivities : dict[str, float], optional
+            Shear sensitivity values.
         offset : int, optional
             16-bit count offset (default 0).
 

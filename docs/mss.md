@@ -25,9 +25,9 @@ The configuration of an MSS is done via the [`MssDeviceConfig`][turban.instrumen
 ```python
 import numpy as np
 
-from turban import ShearProcessing, ShearLevel1, ShearConfig
+from turban import ShearProcessing, ShearConfig
+from turban.instruments.mss.api import mrd_to_level1
 from turban.instruments.mss.config import MssDeviceConfig
-from turban.instruments.mss.mss_mrd import read_mrd, raw_to_level0, level0_to_level1
 from turban.utils.filepaths import atomix_benchmark_baltic_mrd_fpath
 
 # For well-curated .MRD files (including e.g. calibration constants),
@@ -43,13 +43,6 @@ mss_conf = MssDeviceConfig.from_mrd(
     sensornames_ctd={"cond": "COND", "temp": "TEMP", "press": "PRESS"},
     offset=0,
 )
-
-# load MSS data
-with open(atomix_benchmark_baltic_mrd_fpath, "rb") as f:
-    data_raw = read_mrd(f)
-data_level0 = raw_to_level0(mss_conf, data_raw)
-
-data_level1 = level0_to_level1(mss_conf, data_level0)
 
 # Configure the TURBAN processing pipeline
 shear_config = ShearConfig(
@@ -68,19 +61,16 @@ shear_config = ShearConfig(
     spike_include_after=20,
     cutoff_freq_lp=0.5,
 )
-section_number = np.asarray(data_level1["time_count"] * 0, dtype=int)
-section_number[2677:152620] = int(1) # manually defines a section of interest
-shear_level1 = ShearLevel1(
-    time=np.asarray(data_level1["time_count"]),
-    senspeed=np.asarray(data_level1["PSPD_REL"]),
-    shear=np.asarray(data_level1["SHEAR"]),
-    section_number=section_number,
-    cfg=shear_config,
+# load MSS data; the CTD sensors of mss_conf.sensornames_ctd are added as
+# auxiliary variables press, temp and cond
+shear_level1 = mrd_to_level1(
+    atomix_benchmark_baltic_mrd_fpath, "shear", shear_config, mss_conf
 )
 
-# add auxiliary variables not strictly necessary for TURBAN
-for v in ["PRESS", "TEMP", "COND"]:
-    shear_level1.add_aux_data(data_level1[v].values, v.lower())
+# sections have to be defined by the user, mrd_to_level1 sets all to 0 (discard)
+section_number = np.zeros_like(shear_level1.section_number)
+section_number[2677:152620] = 1  # manually defines a section of interest
+shear_level1.section_number = section_number
 
 # set up and run the pipeline
 p = ShearProcessing(shear_level1)
