@@ -10,7 +10,7 @@ authors = [
 license = { text = "GPLv03" }
 dependencies = [
   'beartype>=0.16',
-  'gsw>=3.6',
+  'gsw>=3.6.18',
   'jaxtyping>=0.2.20',
   'matplotlib>=3.6',
   'netCDF4>=1.6.3',
