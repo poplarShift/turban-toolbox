@@ -22,6 +22,7 @@ from turban.process.shear.api import (
 )
 from turban.process.shear.api import ShearProcessing
 from turban.utils.filepaths import atomix_benchmark_baltic_fpath, atomix_benchmark_faroe_fpath
+from turban.utils.seawater import viscosity_kinematic
 
 
 @pytest.mark.parametrize("level", [1, 2, 3, 4])
@@ -85,7 +86,7 @@ def test_goodman_config():
     fig.savefig("out/tests/process/shear/goodman.png")
 
 
-def test_baltic_benchmark():
+def test_baltic_benchmark(tmp_path):
 
     aux_vars = ["time", "press", "temp", "cond"]
     arr = dict(
@@ -133,6 +134,11 @@ def test_baltic_benchmark():
     assert isinstance(level3, ShearLevel3)
     assert isinstance(level4, ShearLevel4)
 
+    # level 4 uses the aggregated molvisc aux variable instead of cfg.molvisc_fallback
+    assert isinstance(level4.molvisc, np.ndarray)
+    assert level4.molvisc.shape == level3.time.shape
+    assert not np.allclose(level4.molvisc, p.cfg.molvisc_fallback)
+
     ds1 = xr.load_dataset(atomix_benchmark_baltic_fpath, group="L1_converted")
     ds2 = xr.load_dataset(atomix_benchmark_baltic_fpath, group="L2_cleaned")
     ds3 = xr.load_dataset(atomix_benchmark_baltic_fpath, group="L3_spectra").rename(
@@ -152,7 +158,25 @@ def test_baltic_benchmark():
     assert "waveno" in ds3_turban.coords
     assert "freq" in ds3_turban.coords
 
-    _plot_level4(ds4, ds4_turban)  # TODO
+    # aux data are exported only with level 1 and 3
+    for level, level_below in [("level2", "level1"), ("level4", "level3")]:
+        aux = set(getattr(p, level_below).aux_data)
+        assert aux and aux <= set(data_tree[level_below].data_vars)
+        assert not aux & set(data_tree[level].data_vars)
+
+    # round trip through netcdf restores shared aux data
+    fname = tmp_path / "baltic.nc"
+    data_tree.to_netcdf(fname)
+    print(data_tree)
+    p2 = ShearProcessing.from_xarray(xr.open_datatree(fname))
+    for level, level_below in [(p2.level2, p2.level1), (p2.level4, p2.level3)]:
+        assert level.aux_data
+        for name, entry in level.aux_data.items():
+            assert entry is level_below.aux_data[name]
+    xr.testing.assert_identical(p2.to_xarray(), data_tree)
+
+    # full level 4 dataset, as aux data (e.g. `press`) are not stored in the level4 node
+    _plot_level4(ds4, p.level4.to_xarray())  # TODO
 
 
 def _plot_level4(ds4, level4):
