@@ -79,10 +79,14 @@ def mrd_to_level1(
             cfg=cast(UTempConfig, proc_cfg),
         )
 
-    for varname in ["SA", "CT", "DENS"]:
-        level1.add_aux_data(data_level1[varname].values, varname)
-    level1.add_aux_data(data_level1[mss_cfg.sensornames_ctd["press"]].values, "Press")
+    # TODO: handle other sensors (ACC, Chl-a etc)
+    for k, v in mss_cfg.sensornames_ctd.items():
+        level1.add_aux_data(data_level1[v].values, name=k, name_out=k)
 
-    level1.add_aux_data(viscosity_kinematic(data_level1["CT"].values), "molvisc")
+    for v in ["ACC", "Chl_A", "ACCx", "ACCy"]:
+        if v in data_level1:
+            level1.add_aux_data(data_level1[v].values, name=v, name_out=v)
+        else:
+            logger.info(f"Variable {v} not present in data")
 
     return level1
