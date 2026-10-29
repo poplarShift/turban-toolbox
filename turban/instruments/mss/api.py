@@ -24,6 +24,7 @@ def mrd_to_level1(
     mss_cfg: MssDeviceConfig | None = None,
     shear_sensitivities: dict[str, float] | None = None,
     sensornames_ctd: dict[STANDARD_CTD_TYPE, str] | None = None,
+    missing: Literal["nan", "interpolate"] | None = None,
 ) -> ShearLevel1 | UTempLevel1:
     """
     Read a binary .MRD file and convert to level1.
@@ -33,6 +34,9 @@ def mrd_to_level1(
     standard ctd names to the MRD sensor names (guessing them when it is None is
     deprecated). If mss_cfg is given, it takes precedence and sensornames_ctd is
     ignored.
+
+    Missing data records (detected from the COUNT channel) are handled according
+    to `missing`, see `mss_mrd.level0_to_level1`.
     """
     if mss_cfg is None:
         # in this case, shear_sensitivities must not be None
@@ -52,11 +56,14 @@ def mrd_to_level1(
         data_raw = mss_mrd.read_mrd(f)
 
     data_level0 = mss_mrd.raw_to_level0(mss_cfg, data_raw)
-    data_level1 = mss_mrd.level0_to_level1(mss_cfg, data_level0)
+    data_level1 = mss_mrd.level0_to_level1(mss_cfg, data_level0, missing=missing)
+
+    # physical time if the MRD file contains a time packet, else seconds
+    time = np.asarray(data_level1["time"])
 
     if target == "shear":
         level1 = ShearLevel1(
-            time=np.asarray(data_level1["time_count"]),
+            time=time,
             senspeed=np.asarray(data_level1["PSPD_REL"]),
             shear=np.asarray(data_level1["SHEAR"]),
             section_number=np.ones_like(data_level1["time_count"], dtype=int),
@@ -65,7 +72,7 @@ def mrd_to_level1(
 
     elif target == "utemp":
         level1 = UTempLevel1(
-            time=np.asarray(data_level1["time_count"]),
+            time=time,
             senspeed=np.asarray(data_level1["PSPD_REL"]),
             dtempdt=np.asarray(data_level1["utemp"]),
             section_number=np.ones_like(data_level1["time_count"], dtype=int),

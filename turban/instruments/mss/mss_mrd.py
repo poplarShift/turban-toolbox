@@ -2,6 +2,7 @@ import datetime
 from pytz import timezone
 import math
 import re
+from typing import Literal
 from importlib.metadata import PackageNotFoundError, version as pkg_version
 
 import numpy
@@ -279,17 +280,48 @@ def parse_header(header):
     return config
 
 
+def count_to_time(count, sampling_freq: float) -> numpy.ndarray:
+    """Convert the MSS sample counter into time since the first sample.
+
+    The counter is a 16 bit integer that increases by one per sample and wraps
+    around at 65536. Missing data records show up as increments larger than one
+    and are accounted for in the returned time. Gaps of 65536 samples or more
+    cannot be detected.
+
+    Parameters
+    ----------
+    count : array_like
+        Sample counter (raw or calibrated with slope 1, i.e. only offset).
+    sampling_freq : float
+        Sampling frequency in Hz.
+
+    Returns
+    -------
+    ndarray
+        Time since the first sample in s.
+    """
+    count = numpy.round(numpy.asarray(count)).astype(numpy.int64)
+    dcount = numpy.diff(count) % 2**16
+    nmissing = int(numpy.sum(dcount[dcount > 1] - 1))
+    if nmissing > 0:
+        logger.warning(
+            "COUNT has %d gaps, %d data records are missing",
+            numpy.sum(dcount > 1),
+            nmissing,
+        )
+    if numpy.any(dcount == 0):
+        logger.warning(
+            "COUNT has %d repeated values (duplicate data records)",
+            numpy.sum(dcount == 0),
+        )
+    return numpy.concatenate([[0], numpy.cumsum(dcount)]) / sampling_freq
+
+
 def raw_to_level0(mss_config, rawdata: dict[str, list]) -> xr.Dataset:
     rawdatac = rawdata["channels"]
     # logger.debug('rawdata keys',rawdata.keys())
-    try:
-        gps = rawdata["gps"]
-        gps_date = rawdata["date"]
-        logger.debug("Found gps information")
-    except:
-        logger.debug("No gps information in data")
-        gps = None
-        pass
+    gps = rawdata.get("gps")
+    gps_date = rawdata.get("date")
 
     count_offset = mss_config.offset
     if rawdata["numsamples"] == 0:
@@ -313,11 +345,15 @@ def raw_to_level0(mss_config, rawdata: dict[str, list]) -> xr.Dataset:
     if gps:
         level0_dataset.attrs["longitude"] = gps[0][1]
         level0_dataset.attrs["latitude"] = gps[0][2]
-        level0_dataset.attrs["date_gps"] = gps_date[0][1].isoformat()
     else:
         logger.warning("No GPS data available, setting longitude/latitude to 0.")
         level0_dataset.attrs["longitude"] = 0
         level0_dataset.attrs["latitude"] = 0
+    # time packets are independent of position packets
+    if gps_date:
+        level0_dataset.attrs["date_gps"] = gps_date[0][1].isoformat()
+    else:
+        logger.warning("No time packet available, physical time cannot be derived.")
         level0_dataset.attrs["date_gps"] = None
     # Add the header to the dataset
     # try:
@@ -361,7 +397,33 @@ def raw_to_level0(mss_config, rawdata: dict[str, list]) -> xr.Dataset:
     return level0_dataset
 
 
-def level0_to_level1(mss_config, level0, pspd_rel=None) -> xr.Dataset:
+def level0_to_level1(
+    mss_config,
+    level0,
+    pspd_rel=None,
+    missing: Literal["nan", "interpolate"] | None = None,
+) -> xr.Dataset:
+    """Convert level0 data to level1 (physical shear, CTD derived variables, time).
+
+    Parameters
+    ----------
+    mss_config : MssDeviceConfig
+        Device configuration.
+    level0 : xr.Dataset
+        Level0 data from `raw_to_level0`.
+    pspd_rel : array_like, optional
+        External platform speed, used if `mss_config.pspd_rel_method` is "external".
+    missing : {"nan", "interpolate"} or None, optional
+        Handling of missing data records detected from the COUNT channel. None
+        (default) keeps the records as they are, so that time is irregular at gaps.
+        "nan" inserts time steps filled with NaN, "interpolate" inserts linearly
+        interpolated time steps. Both also drop duplicate records.
+
+    Returns
+    -------
+    xr.Dataset
+        Level1 data with dimension "time".
+    """
     logger.debug("Keys of level0 data:{}".format(level0.keys()))
     if True:
         # Loop over all shear sensors and calculate shear
@@ -387,16 +449,18 @@ def level0_to_level1(mss_config, level0, pspd_rel=None) -> xr.Dataset:
                 "index": index,
             },
         )
-        # Count the number of samples and divide by sampling frequency, to get a time vector
-        time_count = numpy.cumsum(index) / mss_config.sampling_freq
-        logger.debug("time count %s", time_count)
-        logger.debug("Time count %s %s", numpy.shape(time_count), numpy.shape(index))
-        channelname = "time_count"
-        level1_dataset[channelname] = time_count
-        level1_dataset[channelname].attrs["units"] = "s"
-        level1_dataset[channelname].attrs[
-            "description"
-        ] = "count of samples divided by sampling frequency"
+        # Time of each record since first sample from the COUNT channel, accounting
+        # for missing records. Used at the end to insert empty time steps.
+        count_sensornames = [k for k in level0.keys() if str(k).upper() == "COUNT"]
+        if count_sensornames:
+            time_record = count_to_time(
+                level0[count_sensornames[0]].values, mss_config.sampling_freq
+            )
+        else:
+            logger.warning(
+                "No COUNT channel found, time assumes no missing data records"
+            )
+            time_record = numpy.arange(nsamples) / mss_config.sampling_freq
 
         # Create a time vector, TODO: This has to be improved alot!
         if False:  # Calculate time
@@ -500,13 +564,55 @@ def level0_to_level1(mss_config, level0, pspd_rel=None) -> xr.Dataset:
             )
 
         level1_dataset["utemp"] = (
-            ["n_temp", "time"],
+            ["n_temp", "index"],
             mss_utils.deconvolve_mss_ntchp(
                 level0["NTCHP"].values,
                 level0["NTC"].values,
                 sampfreq=mss_config.sampling_freq,
                 gain=mss_config.gain_utemp,
             )[numpy.newaxis, :],
+        )
+
+        # Optionally insert time steps for missing records (dropping duplicate records)
+        sample = numpy.round(time_record * mss_config.sampling_freq).astype(int)
+        if missing is not None:
+            _, keep = numpy.unique(sample, return_index=True)
+            level1_dataset = level1_dataset.isel(index=keep).assign_coords(
+                index=sample[keep]
+            )
+            sample = numpy.arange(sample[-1] + 1)
+            if missing == "nan":
+                level1_dataset = level1_dataset.reindex(index=sample)
+            else:
+                level1_dataset = level1_dataset.interp(index=sample, method="linear")
+
+        time_count = sample / mss_config.sampling_freq
+        level1_dataset["time_count"] = (["index"], time_count)
+        level1_dataset["time_count"].attrs["units"] = "s"
+        level1_dataset["time_count"].attrs["description"] = "time since first sample"
+
+        # Physical time: start time of the file (time packet, 1 s resolution) + time_count
+        if level0.attrs.get("date_gps") is not None:
+            t0 = (
+                datetime.datetime.fromisoformat(level0.attrs["date_gps"])
+                .astimezone(datetime.timezone.utc)
+                .replace(tzinfo=None)
+            )
+            time = numpy.datetime64(t0, "ns") + numpy.round(time_count * 1e9).astype(
+                "timedelta64[ns]"
+            )
+            time_attrs = {
+                "description": "UTC, start time from MRD time packet "
+                "(1 s resolution) plus time since first sample"
+            }
+        else:
+            time = time_count
+            time_attrs = {"units": "s", "description": "time since first sample"}
+
+        level1_dataset = (
+            level1_dataset.drop_vars("index")
+            .rename_dims(index="time")
+            .assign_coords(time=(["time"], time, time_attrs))
         )
 
         return level1_dataset
