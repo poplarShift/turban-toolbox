@@ -349,9 +349,9 @@ def raw_to_level0(mss_config, rawdata: dict[str, list]) -> xr.Dataset:
         level0_dataset.attrs["longitude"] = gps[0][1]
         level0_dataset.attrs["latitude"] = gps[0][2]
     else:
-        logger.warning("No GPS data available, setting longitude/latitude to 0.")
-        level0_dataset.attrs["longitude"] = 0
-        level0_dataset.attrs["latitude"] = 0
+        logger.warning("No GPS data available.")
+        level0_dataset.attrs["longitude"] = numpy.nan
+        level0_dataset.attrs["latitude"] = numpy.nan
     # time packets are independent of position packets
     if gps_date:
         level0_dataset.attrs["date_gps"] = gps_date[0][1].isoformat()
