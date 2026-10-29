@@ -162,6 +162,33 @@ def test_processing_chain_from_level1():
     np.testing.assert_array_equal(p2.level4.time, p.level4.time)
 
 
+@pytest.mark.parametrize("agg_method", ["mean", "median"])
+def test_aux_data_agg_method_netcdf_roundtrip(agg_method):
+    pres = np.linspace(0.0, 100.0, N)
+    level1 = make_level1()
+    level1.add_aux_data(pres, name="pres", agg_method=agg_method, name_out="foo")
+    p = Processing(level1)
+
+    # agg_method is stored in the level 3 aux data
+    _, arr, attrs = p.level3.aux_data["foo"]
+    assert attrs["agg_method"] == agg_method
+
+    outdir = Path("out/tests/process/generic")
+    outdir.mkdir(parents=True, exist_ok=True)
+    fname = outdir / f"test_aux_data_agg_method_netcdf_roundtrip_{agg_method}.nc"
+    p.to_netcdf(str(fname))
+
+    # agg_method is written as a netCDF variable attribute
+    assert xr.load_datatree(fname)["level3"]["foo"].attrs["agg_method"] == agg_method
+
+    # and read back into the aux data, which level 4 shares with level 3
+    p2 = Processing.from_netcdf(str(fname))
+    for level in (p2.level3, p2.level4):
+        _, arr2, attrs2 = level.aux_data["foo"]
+        assert attrs2["agg_method"] == agg_method
+        np.testing.assert_allclose(arr2, arr)
+
+
 def test_processing_subclass_requires_level_mapping():
     with pytest.raises(TypeError, match="_level_mapping"):
 
